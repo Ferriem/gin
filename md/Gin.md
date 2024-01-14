@@ -283,3 +283,186 @@ func main() {
 In this example, we created a `UserController` struct with a `GetUserInfo` method to handle user-related logic.
 
 Separating business logic into controllers makes the codebase cleaner and more organized.
+
+### Building with Gin
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+type Todo struct {
+	gorm.Model
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func main() {
+	router := gin.Default()
+
+	//Connects to an SQLite database and initializes table for Todo model
+	db, err := gorm.Open(sqlite.Open("todo.db"), &gorm.Config{})
+	if err != nil {
+		panic("failed to connect database")
+	}
+	db.AutoMigrate(&Todo{})
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-signals
+		fmt.Println("\nReceived termination signal. Cleaning up...")
+		// Close the database connection
+		sqlDB, err := db.DB()
+		if err != nil {
+			fmt.Println("Error getting *sql.DB:", err)
+			os.Exit(1)
+		}
+
+		// Close the *sql.DB connection
+		err = sqlDB.Close()
+		if err != nil {
+			fmt.Println("Error closing *sql.DB:", err)
+		} else {
+			fmt.Println("*sql.DB closed successfully.")
+		}
+
+		// Delete the todo.db file
+		err = os.Remove("todo.db")
+		if err != nil {
+			fmt.Println("Error deleting todo.db:", err)
+		} else {
+			fmt.Println("todo.db deleted successfully.")
+		}
+
+		// Exit the program
+		os.Exit(0)
+	}()
+
+	router.POST("/todos", func(c *gin.Context) {
+		var todo Todo
+		if err := c.ShouldBindJSON(&todo); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid JSON data"})
+			return
+		}
+		if todo.Title == "" || todo.Description == "" {
+			c.JSON(400, gin.H{"error": "Title and description cannot be empty"})
+		}
+
+		db.Create(&todo)
+
+		c.JSON(200, todo)
+	})
+
+	router.GET("/todos", func(c *gin.Context) {
+		var todos []Todo
+		db.Find(&todos)
+		if len(todos) == 0 {
+			c.JSON(404, gin.H{"error": "todos is empty"})
+			return
+		}
+		c.JSON(200, todos)
+	})
+
+	router.GET("/todos/:id", func(c *gin.Context) {
+		var todo Todo
+		id := c.Param("id")
+		result := db.First(&todo, id)
+		if result.Error != nil {
+			if result.Error == gorm.ErrRecordNotFound {
+				c.JSON(404, gin.H{"error": "No todo found with that ID"})
+			} else {
+				c.JSON(404, gin.H{"error": "Todo not found"})
+			}
+			return
+		}
+		c.JSON(200, todo)
+	})
+
+	router.PUT("/todos/:id", func(c *gin.Context) {
+		var todo Todo
+		id := c.Param("id")
+		result := db.First(&todo, id)
+		if result.Error != nil {
+			c.JSON(404, gin.H{"error": "Todo not found"})
+			return
+		}
+		var updatedTodo Todo
+		if err := c.ShouldBindJSON(&updatedTodo); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid JSON data"})
+			return
+		}
+		if updatedTodo.Title == "" || updatedTodo.Description == "" {
+			c.JSON(400, gin.H{"error": "Title and description cannot be empty"})
+		}
+
+		todo.Title = updatedTodo.Title
+		todo.Description = updatedTodo.Description
+		db.Save(&todo)
+
+		c.JSON(200, todo)
+	})
+
+	router.DELETE("/todos/:id", func(c *gin.Context) {
+		var todo Todo
+		id := c.Param("id")
+
+		result := db.First(&todo, id)
+		if result.Error != nil {
+			if result.Error == gorm.ErrRecordNotFound {
+				c.JSON(404, gin.H{"error": "No todo found with that ID"})
+			} else {
+				c.JSON(404, gin.H{"error": "Todo not found"})
+			}
+			return
+		}
+
+		db.Delete(&todo)
+
+		c.JSON(200, gin.H{"message": fmt.Sprintf("Todo with ID %s deleted", id)})
+	})
+
+	router.Run(":8080")
+}
+```
+
+```sh
+~/ curl -X POST -d '{"title": "key", "description": "value"}' 127.0.0.1:8080/todos
+{"ID":1,"CreatedAt":"2024-01-14T18:49:22.459819+08:00","UpdatedAt":"2024-01-14T18:49:22.459819+08:00","DeletedAt":null,"title":"key","description":"value"}%
+~/ curl -X GET 127.0.0.1:8080/todos
+[{"ID":1,"CreatedAt":"2024-01-14T18:49:22.459819+08:00","UpdatedAt":"2024-01-14T18:49:22.459819+08:00","DeletedAt":null,"title":"key","description":"value"}]%
+~/ curl -X POST -d '{"title": "apple", "description": "tech"}' 127.0.0.1:8080/todos
+{"ID":2,"CreatedAt":"2024-01-14T18:50:23.856003+08:00","UpdatedAt":"2024-01-14T18:50:23.856003+08:00","DeletedAt":null,"title":"apple","description":"tech"}%
+~/ curl -X GET 127.0.0.1:8080/todos
+[{"ID":1,"CreatedAt":"2024-01-14T18:49:22.459819+08:00","UpdatedAt":"2024-01-14T18:49:22.459819+08:00","DeletedAt":null,"title":"key","description":"value"},{"ID":2,"CreatedAt":"2024-01-14T18:50:23.856003+08:00","UpdatedAt":"2024-01-14T18:50:23.856003+08:00","DeletedAt":null,"title":"apple","description":"tech"}]%
+~/ curl -X GET 127.0.0.1:8080/todos/1
+{"ID":1,"CreatedAt":"2024-01-14T18:49:22.459819+08:00","UpdatedAt":"2024-01-14T18:49:22.459819+08:00","DeletedAt":null,"title":"key","description":"value"}%
+~/ curl -X PUT -d '{"title": "key_update", "description": "value_update"}' 127.0.0.1:8080/todos/2
+{"ID":2,"CreatedAt":"2024-01-14T18:50:23.856003+08:00","UpdatedAt":"2024-01-14T18:53:58.312751+08:00","DeletedAt":null,"title":"key_update","description":"value_update"}%
+~/ curl -X GET 127.0.0.1:8080/todos/2
+{"ID":2,"CreatedAt":"2024-01-14T18:50:23.856003+08:00","UpdatedAt":"2024-01-14T18:53:58.312751+08:00","DeletedAt":null,"title":"key_update","description":"value_update"}%
+~/ curl -X DELETE 127.0.0.1:8080/todos/1
+{"message":"Todo with ID 1 deleted"}%
+~/ curl -X GET 127.0.0.1:8080/todos
+[{"ID":2,"CreatedAt":"2024-01-14T18:50:23.856003+08:00","UpdatedAt":"2024-01-14T18:53:58.312751+08:00","DeletedAt":null,"title":"key_update","description":"value_update"}]%
+```
+
+- `AutoMigrate` create **database tables** based on the defined Go struct.
+
+- `ShouldBindJSON` to find whether a request with a data segment. Addtionally, if a filed in the JSON data **matches an exported filed** in the structure, Gin attempts to bind the value to that field. **Ignore** extra filed. 
+
+- `db.Create` insert a new record into the database table that correspinds to the GORM model.
+- `db.Save` Is used for **both** creating a new record and updating an existing record. Change the update time.
+- `db.Find` retrieve records from the database match the conditions specified by the provided struct or map.
+
+- `db.First` retrieve the first record that matches the conditions. If there is nothing  matched, return error.

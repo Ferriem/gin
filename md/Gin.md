@@ -466,3 +466,144 @@ func main() {
 - `db.Find` retrieve records from the database match the conditions specified by the provided struct or map.
 
 - `db.First` retrieve the first record that matches the conditions. If there is nothing  matched, return error.
+
+### Log And Logrus
+
+#### Configuration
+
+```sh
+go get -u github.com/sirupsen/logrus
+```
+
+Implement a server to log request into local Redis database.
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"github.com/sirupsen/logrus"
+)
+
+type RedisHook struct {
+	client *redis.Client
+	key    string
+}
+
+func NewRedisHook(client *redis.Client, key string) *RedisHook {
+	return &RedisHook{
+		client: client,
+		key:    key,
+	}
+}
+
+func (hook *RedisHook) Fire(entry *logrus.Entry) error {
+	b := entry.Data
+
+	logData, err := json.Marshal(b)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	err = hook.client.RPush(ctx, hook.key, logData).Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (hook *RedisHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func LoggerToRedis(rdb *redis.Client) gin.HandlerFunc {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+
+	redisHook := NewRedisHook(rdb, "logrus")
+
+	logger.AddHook(redisHook)
+
+	return func(c *gin.Context) {
+		startTime := time.Now()
+		c.Next()
+		endTime := time.Now()
+		latencyTime := endTime.Sub(startTime)
+		reqMethod := c.Request.Method
+		reqUri := c.Request.RequestURI
+		statusCode := c.Writer.Status()
+		clientIP := c.ClientIP()
+		logger.WithFields(logrus.Fields{
+			"status_code":  statusCode,
+			"latency_time": latencyTime,
+			"client_ip":    clientIP,
+			"req_method":   reqMethod,
+			"req_uri":      reqUri,
+		}).Info()
+	}
+}
+
+func main() {
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
+	router := gin.Default()
+	router.Use(LoggerToRedis(redisClient))
+
+	router.Any("/product", func(c *gin.Context) {
+		price := c.Query("price")
+		if price != "" {
+			c.JSON(200, gin.H{"message": "product", "price": price})
+			return
+		}
+		c.JSON(200, gin.H{"message": "product"})
+	})
+
+	router.Any("/order", func(c *gin.Context) {
+		c.JSON(400, gin.H{"error": "order"})
+	})
+
+	router.Run(":8080")
+
+}
+
+```
+
+```sh
+~/ curl -X GET "127.0.0.1:8080/product?price=10"
+{"message":"product","price":"10"}%
+~/ curl -X DELETE "127.0.0.1:8080/product?price=10"
+{"message":"product","price":"10"}%
+~/ curl -X DELETE "127.0.0.1:8080/product?price"
+{"message":"product"}%
+
+127.0.0.1:6379> lrange logrus 0 -1
+1) "{\"client_ip\":\"127.0.0.1\",\"latency_time\":80625,\"req_method\":\"GET\",\"req_uri\":\"/product?price=10\",\"status_code\":200}"
+2) "{\"client_ip\":\"127.0.0.1\",\"latency_time\":19208,\"req_method\":\"DELETE\",\"req_uri\":\"/product?price=10\",\"status_code\":200}"
+3) "{\"client_ip\":\"127.0.0.1\",\"latency_time\":35000,\"req_method\":\"DELETE\",\"req_uri\":\"/product?price\",\"status_code\":200}"
+```
+
+- `Fire()` method marshal data to json and push it to Redis list.
+- `Level()` records the level need to be stored.
+- `LoggerToRedis` is a middleware logging request information and sends it to Redis.
+- `Logrus.New()` create a new instance of the `Logrus.Logger` type. This logger is the main interface through which you interact with the Logrus logging framework.
+- `Logger.Info`  used to log an informational message
+
+```go
+logger := logrus.New()
+logger.SetOutput(myCustomWriter)
+logger.SetLevel(logrus.DebugLevel)
+logger.SetFormatter(&logrus.TextFormatter{})
+```
+
+- `Logger.AddHook` add a Hook to the logger, this hook should be executed whenever a log enrty is made.
+
+- `WithFields` method in Logrus is used to attach additional fields(key-value pairs) to a log entry.

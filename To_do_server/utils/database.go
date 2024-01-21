@@ -11,13 +11,13 @@ type key_value_pair struct {
 	Value string `json:"value"`
 }
 
-func Add(client *redis.Client, id string, title string, description string) error {
+func Add(id string, title string, description string) error {
 	ctx := context.Background()
 	key_value := key_value_pair{
 		Key:   id,
 		Value: title,
 	}
-	err := client.RPush(ctx, id, key_value).Err()
+	err := rdb.RPush(ctx, id, key_value).Err()
 	if err != nil {
 		return err
 	}

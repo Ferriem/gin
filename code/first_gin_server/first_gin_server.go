@@ -14,7 +14,9 @@ func main() {
 	})
 
 	router.GET("/bye/", func(c *gin.Context) {
-		c.JSON(200, gin.H{"message": "Goodbye World"})
+		c.JSON(200, gin.H{
+			"message": "Goodbye World",
+		})
 	})
 
 	//Run the router on port 8080

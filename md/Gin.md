@@ -29,6 +29,38 @@ Created a new Gin router using `gin.Default()`. Then defined a simple router for
 
 ## Framework
 
+### API
+
+#### API parameters
+
+The parameters can be passed like this `user/ferriem/score`
+
+```go
+	r.GET("/user/:name/:title", func(c *gin.Context) {
+		name := c.Param("name") //name = ferriem
+		title := c.Param("title") // title = score
+		c.JSON(http.StatusOK,gin.H{
+			"name":name, 
+			"title":title,
+		})
+	})
+```
+
+#### Query parameters
+
+`/user?name=ferriem&tag=score`
+
+```go
+	r.GET("/user", func(c *gin.Context) {
+		name := c.DefaultQuery("name","Rick")
+		tag := c.Query("tag")
+		c.JSON(http.StatusOK,gin.H{
+			"name":name,
+			"tag":tag,
+		})
+	})
+```
+
 ### Middleware in Gin
 
 #### Logger middleware
@@ -466,6 +498,79 @@ func main() {
 - `db.Find` retrieve records from the database match the conditions specified by the provided struct or map.
 
 - `db.First` retrieve the first record that matches the conditions. If there is nothing  matched, return error.
+
+### Data handling
+
+```go
+type Login struct {
+	User string `form:"user" json:"user" uri:"user" binding:"required"`
+	Password string `form:"password" json:"password" uri:"password" binding:"required"`
+}
+
+
+func main() {
+	r := gin.Default()
+	login := Login{}
+	//{"user":"ferriem","password":"123456"}
+	r.POST("/json", func(c *gin.Context) {
+		if err := c.ShouldBindJSON(&login); err != nil{
+			c.JSON(http.StatusBadRequest,gin.H{
+				"error":err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK,gin.H{
+			"user": login.User,
+			"password": login.Password,
+		})
+	})
+
+
+	// form
+	r.POST("/form", func(c *gin.Context) {
+		if err := c.ShouldBind(&login);err != nil{
+			c.JSON(http.StatusBadRequest,gin.H{
+				"error":err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK,gin.H{
+			"user":login.User,
+			"password":login.Password,
+		})
+	})
+
+	// query
+	r.GET("/query", func(c *gin.Context) {
+		if err := c.ShouldBindQuery(&login); err != nil{
+			c.JSON(http.StatusBadRequest,gin.H{
+				"error":err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK,gin.H{
+			"user":login.User,
+			"password":login.Password,
+		})
+	})
+
+	// api
+	r.GET("/api/:user/:password", func(c *gin.Context) {
+		if err := c.ShouldBindUri(&login); err != nil{
+			c.JSON(http.StatusBadRequest,gin.H{
+				"error":err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK,gin.H{
+			"user":login.User,
+			"password":login.Password,
+		})
+	})
+
+	r.Run()
+}
+```
 
 ### Log And Logrus
 

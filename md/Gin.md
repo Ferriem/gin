@@ -712,3 +712,218 @@ logger.SetFormatter(&logrus.TextFormatter{})
 - `Logger.AddHook` add a Hook to the logger, this hook should be executed whenever a log enrty is made.
 
 - `WithFields` method in Logrus is used to attach additional fields(key-value pairs) to a log entry.
+
+### Cookie
+
+```go
+//http/net package
+type Cookie struct {
+	Name  string
+	Value string
+
+	Path       string    // optional
+	Domain     string    // optional
+	Expires    time.Time // optional
+	RawExpires string    // for reading cookies only
+
+	// MaxAge=0 means no 'Max-Age' attribute specified.
+	// MaxAge<0 means delete cookie now, equivalently 'Max-Age: 0'
+	// MaxAge>0 means Max-Age attribute present and given in seconds
+	MaxAge   int
+	Secure   bool
+	HttpOnly bool
+	SameSite SameSite
+	Raw      string
+	Unparsed []string // Raw text of unparsed attribute-value pairs
+}
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+func SetCookie(w http.ResponseWriter, r *http.Request) {
+	cookie := http.Cookie{
+		Name:     "user",
+		Value:    "admin",
+		HttpOnly: true,
+		MaxAge:   60,
+	}
+	http.SetCookie(w, &cookie)
+}
+
+func GetCookie(w http.ResponseWriter, r *http.Request) {
+	cookie, _ := r.Cookie("user")
+	w.Write([]byte(cookie.Value))
+	fmt.Println(cookie.Value)
+}
+
+func main() {
+	r := gin.New()
+	r.GET("/cookie", func(c *gin.Context) {
+		cookie, err := c.Cookie("gin_cookie")
+		if err != nil {
+			cookie = "NotSet"
+			c.SetCookie("gin_cookie", "test", 60, "/", "127.0.0.1", false, true)
+		}
+		fmt.Printf("Cookie value: %s \n", cookie)
+	})
+	r.Run(":8080")
+}
+```
+
+- `c.Cookie("name")` finds the cookie with name, `err = nil` if found none.
+- `c.SetCookie()` sets cookie to domain/path.
+
+### JWT
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
+
+	"github.com/gin-gonic/gin"
+)
+
+type UserInfo struct {
+	Username string `json:"username" form:"username" binding:"required"`
+	Password string `json:"password" form:"password" binding:"required"`
+}
+
+type storage struct {
+	Username string `json:"username"`
+	jwt.StandardClaims
+}
+
+const TokenExpireDuration = time.Minute * 2
+
+var Secret = []byte("secret")
+
+func GenToken(username string) (string, error) {
+	t := storage{
+		username,
+		jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(TokenExpireDuration).Unix(),
+			Issuer:    "ferriem",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, t)
+	return token.SignedString(Secret)
+}
+
+func ParseToken(tokenString string) (*storage, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &storage{}, func(token *jwt.Token) (interface{}, error) {
+		return Secret, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claims, ok := token.Claims.(*storage); ok && token.Valid {
+		return claims, nil
+	}
+	return nil, err
+}
+
+func authHandler(c *gin.Context) {
+	user := UserInfo{}
+	if err := c.ShouldBind(&user); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 404,
+			"msg":  "invalid params",
+		})
+		return
+	}
+	if user.Username == "root" && user.Password == "123456" {
+		tokenString, err := GenToken(user.Username)
+		if err != nil {
+			fmt.Println(err)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"msg":  "success",
+			"data": gin.H{"token": tokenString},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 400,
+		"msg":  "auth failed",
+	})
+	return
+}
+
+func JWTAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.Request.Header.Get("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"code": 400,
+				"msg":  "authHeader empty",
+			})
+			fmt.Println("authHeader empty")
+			c.Abort()
+			return
+		}
+		parts := strings.SplitN(authHeader, " ", 2)
+		fmt.Println(parts[0])
+		if !(len(parts) == 2 && parts[0] == "Bearer") {
+			c.JSON(http.StatusOK, gin.H{
+				"code": 404,
+				"msg":  "authHeader format error",
+			})
+			c.Abort()
+			return
+		}
+		msg, err := ParseToken(parts[1])
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code": 400,
+				"msg":  "token invalid",
+			})
+			c.Abort()
+			return
+		}
+		c.Set("username", msg.Username)
+		fmt.Println(msg.Username)
+		c.Next()
+	}
+}
+
+func main() {
+	r := gin.Default()
+	r.POST("/auth", authHandler)
+
+	r.GET("/home", JWTAuthMiddleware(), func(c *gin.Context) {
+		username := c.MustGet("username").(string)
+		fmt.Println(username)
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"msg":  "success",
+			"data": username,
+		})
+	})
+	r.Run(":8080")
+}
+
+```
+
+```sh
+~/ curl -X POST -H "Content-Type: application/json" -d '{"username": "root", "password": "123456"}' http://127.0.0.1:8080/auth
+{"code":200,"data":{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InJvb3QiLCJleHAiOjE3MDYzNDM4MDYsImlzcyI6ImZlcnJpZW0ifQ.mD8gHkXvjAi15gFJh28QC6092dRUQYnt_G2UGq8ws28"},"msg":"success"}%
+
+~/ curl -X GET -H "Authorization: Bearer token" http://127.0.0.1:8080/home
+{"code":200,"data":"root","msg":"success"}%
+```
+

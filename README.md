@@ -11,3 +11,5 @@ go get -u github.com/gin-gonic/gin
 - [ ] Controller
 - [ ] Data handle
 - [ ] Logrus
+- [ ] Cookie
+- [ ] JWT
